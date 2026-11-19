@@ -1,0 +1,34 @@
+name: Daily Sports Card Portfolio Tracker
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # 每天台灣時間早上 08:00 自動執行
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-portfolio:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: pip install pandas requests numpy
+
+      - name: Run Daily Market Valuation Script
+        run: python scripts/daily_update.py
+
+      - name: Commit and Push Updated CSV
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action Bot"
+          git add cards_portfolio_cleaned.csv
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update card valuations $(date +'%Y-%m-%d')" && git push)
