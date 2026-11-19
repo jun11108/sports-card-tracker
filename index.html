@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>球員卡資產與行情自動追蹤系統</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .card-panel { background-color: #1e293b; border: 1px solid #334155; border-radius: 0.75rem; }
+        .table-container { max-height: 600px; overflow-y: auto; }
+        th { position: sticky; top: 0; background-color: #1e293b; z-index: 10; cursor: pointer; }
+        th:hover { background-color: #334155; }
+    </style>
+</head>
+<body class="p-4 md:p-8">
+    <div class="max-w-7xl mx-auto space-y-6">
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-slate-700 pb-4">
+            <div>
+                <h1 class="text-2xl md:text-3xl font-bold text-white">🏆 球員卡收藏與投資績效追蹤中心</h1>
+                <p class="text-slate-400 text-sm mt-1">自動讀取 cards_portfolio_cleaned.csv | 支援依球員、年份、PSA 分數與總績效即時查詢</p>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="resetFilters()" class="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-sm font-medium rounded-lg">重置篩選</button>
+                <button onclick="exportFilteredCSV()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-sm font-medium rounded-lg">匯出篩選 CSV</button>
+            </div>
+        </div>
+
+        <!-- KPI 面板 -->
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
+            <div class="card-panel p-4">
+                <div class="text-slate-400 text-xs font-semibold">篩選卡片張數</div>
+                <div id="kpi-count" class="text-2xl font-bold text-white mt-1">載入中...</div>
+                <div id="kpi-rc-sub" class="text-xs text-blue-400 mt-1">RC 新秀卡: 0 張</div>
+            </div>
+            <div class="card-panel p-4">
+                <div class="text-slate-400 text-xs font-semibold">總投入成本 (NT$)</div>
+                <div id="kpi-cost" class="text-2xl font-bold text-amber-400 mt-1">$0</div>
+                <div id="kpi-avg-cost" class="text-xs text-slate-400 mt-1">平均單價: $0</div>
+            </div>
+            <div class="card-panel p-4">
+                <div class="text-slate-400 text-xs font-semibold">目前總估值 (NT$)</div>
+                <div id="kpi-val" class="text-2xl font-bold text-emerald-400 mt-1">$0</div>
+                <div class="text-xs text-slate-400 mt-1">每日自動更新 / 可手動試算</div>
+            </div>
+            <div class="card-panel p-4">
+                <div class="text-slate-400 text-xs font-semibold">未實現總損益 / ROI</div>
+                <div id="kpi-pnl" class="text-2xl font-bold text-emerald-400 mt-1">$0 (0.0%)</div>
+                <div class="text-xs text-slate-400 mt-1">依目前估值動態計算</div>
+            </div>
+            <div class="card-panel p-4 col-span-2 md:col-span-1">
+                <div class="text-slate-400 text-xs font-semibold">PSA / 鑑定卡收藏量</div>
+                <div id="kpi-psa" class="text-2xl font-bold text-purple-400 mt-1">0 張</div>
+                <div id="kpi-psa-detail" class="text-xs text-slate-300 mt-1">PSA 10: 0 | PSA 9: 0</div>
+            </div>
+        </div>
+
+        <!-- 篩選器 -->
+        <div class="card-panel p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-6 gap-3">
+            <div class="md:col-span-2">
+                <label class="block text-xs text-slate-400 mb-1">🔍 關鍵字搜尋 (球員/商品/卡號/證號)</label>
+                <input type="text" id="filter-search" oninput="applyFilters()" placeholder="例如: Ohtani, Edwards, #1..." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+            </div>
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">🏀 依球員篩選</label>
+                <select id="filter-player" onchange="applyFilters()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"><option value="">全部球員</option></select>
+            </div>
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">📅 依卡面年份</label>
+                <select id="filter-card-year" onchange="applyFilters()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"><option value="">全部卡面年份</option></select>
+            </div>
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">🛒 依購買年份</label>
+                <select id="filter-buy-year" onchange="applyFilters()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"><option value="">全部購買年份</option></select>
+            </div>
+            <div>
+                <label class="block text-xs text-slate-400 mb-1">💎 鑑定與分數</label>
+                <select id="filter-grade" onchange="applyFilters()" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
+                    <option value="">全部狀態 (含裸卡)</option>
+                    <option value="GRADED_ONLY">僅顯示鑑定卡</option>
+                    <option value="PSA_ONLY">僅顯示 PSA 鑑定卡</option>
+                    <option value="PSA 10">PSA 10</option>
+                    <option value="PSA 9">PSA 9</option>
+                    <option value="RAW_ONLY">僅顯示裸卡 (Raw)</option>
+                    <option value="RC_ONLY">僅顯示 RC 新秀卡</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- 圖表區 -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div class="card-panel p-4"><h3 class="text-sm font-bold text-slate-200 mb-2">📊 主力球員投資排行 (Top 10)</h3><canvas id="chart-players" height="220"></canvas></div>
+            <div class="card-panel p-4"><h3 class="text-sm font-bold text-slate-200 mb-2">📈 卡面年份資金配置</h3><canvas id="chart-years" height="220"></canvas></div>
+            <div class="card-panel p-4"><h3 class="text-sm font-bold text-slate-200 mb-2">🏅 鑑定分數收藏量統計</h3><canvas id="chart-grades" height="220"></canvas></div>
+        </div>
+
+        <!-- 明細表格 -->
+        <div class="card-panel overflow-hidden">
+            <div class="p-4 border-b border-slate-700">
+                <h3 class="text-base font-bold text-white">📋 館藏卡片明細與即時行情表 <span class="text-xs font-normal text-slate-400 ml-2">(點欄位標題可排序；可直接修改「目前估值」試算損益)</span></h3>
+            </div>
+            <div class="table-container">
+                <table class="w-full text-left border-collapse text-sm">
+                    <thead>
+                        <tr class="border-b border-slate-700 text-slate-300 text-xs uppercase">
+                            <th class="p-3" onclick="sortTable('日期')">購買日期 ↕</th>
+                            <th class="p-3" onclick="sortTable('球員')">球員 ↕</th>
+                            <th class="p-3" onclick="sortTable('年分')">卡面年分 ↕</th>
+                            <th class="p-3" onclick="sortTable('牌子')">品牌/系列 ↕</th>
+                            <th class="p-3">商品描述 / 卡號</th>
+                            <th class="p-3" onclick="sortTable('鑑定')">鑑定分數 ↕</th>
+                            <th class="p-3 text-right" onclick="sortTable('購入成本_TWD')">購入成本 ↕</th>
+                            <th class="p-3 text-right" onclick="sortTable('目前估值_TWD')">目前估值 (可改) ↕</th>
+                            <th class="p-3 text-right" onclick="sortTable('未實現損益_TWD')">未實現損益 ↕</th>
+                            <th class="p-3 text-center">即時行情與查驗</th>
+                        </tr>
+                    </thead>
+                    <tbody id="card-tbody" class="divide-y divide-slate-800"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let rawData = [], filteredData = [], sortCol = '日期', sortAsc = false;
+        let chartPlayers = null, chartYears = null, chartGrades = null;
+
+        // 自動載入同目錄下的 cards_portfolio_cleaned.csv
+        Papa.parse('cards_portfolio_cleaned.csv?v=' + new Date().getTime(), {
+            download: true,
+            header: true,
+            skipEmptyLines: true,
+            complete: function(results) {
+                rawData = results.data.map(r => ({
+                    ...r,
+                    '列號': parseInt(r['列號']) || 0,
+                    '購入成本_TWD': parseFloat(r['購入成本_TWD']) || 0,
+                    '目前估值_TWD': parseFloat(r['目前估值_TWD']) || 0,
+                    '未實現損益_TWD': parseFloat(r['未實現損益_TWD']) || 0
+                }));
+                initFilters();
+                applyFilters();
+            }
+        });
+
+        function initFilters() {
+            const players = [...new Set(rawData.map(r => r['球員']))].filter(Boolean).sort();
+            const cYears = [...new Set(rawData.map(r => String(r['年分'])))].filter(Boolean).sort().reverse();
+            const bYears = [...new Set(rawData.map(r => String(r['購買年份'])))].filter(Boolean).sort().reverse();
+            players.forEach(p => document.getElementById('filter-player').add(new Option(p, p)));
+            cYears.forEach(y => document.getElementById('filter-card-year').add(new Option(y, y)));
+            bYears.forEach(y => document.getElementById('filter-buy-year').add(new Option(y, y)));
+        }
+
+        function applyFilters() {
+            const q = document.getElementById('filter-search').value.toLowerCase().trim();
+            const p = document.getElementById('filter-player').value;
+            const cy = document.getElementById('filter-card-year').value;
+            const by = document.getElementById('filter-buy-year').value;
+            const gr = document.getElementById('filter-grade').value;
+
+            filteredData = rawData.filter(r => {
+                if (p && r['球員'] !== p) return false;
+                if (cy && String(r['年分']) !== cy) return false;
+                if (by && String(r['購買年份']) !== by) return false;
+                if (gr) {
+                    if (gr === 'GRADED_ONLY' && r['鑑定'] === '裸卡(Raw)') return false;
+                    if (gr === 'PSA_ONLY' && r['鑑定'] !== 'PSA') return false;
+                    if (gr === 'RAW_ONLY' && r['鑑定'] !== '裸卡(Raw)') return false;
+                    if (gr === 'RC_ONLY' && r['RC'] !== 'V') return false;
+                    if (gr === 'PSA 10' && !(r['鑑定'] === 'PSA' && String(r['分數']).includes('10'))) return false;
+                    if (gr === 'PSA 9' && !(r['鑑定'] === 'PSA' && String(r['分數']).includes('9'))) return false;
+                }
+                if (q) {
+                    const hay = `${r['球員']} ${r['牌子']} ${r['系列']} ${r['卡種']} ${r['商品']} ${r['卡號']} ${r['鑑定']} ${r['鑑定編號']} ${r['購買管道']}`.toLowerCase();
+                    if (!hay.includes(q)) return false;
+                }
+                return true;
+            });
+            sortData(); updateKPIs(); updateCharts(); renderTable();
+        }
+
+        function sortTable(col) {
+            sortAsc = (sortCol === col) ? !sortAsc : false;
+            sortCol = col;
+            sortData(); renderTable();
+        }
+
+        function sortData() {
+            filteredData.sort((a, b) => {
+                let va = a[sortCol], vb = b[sortCol];
+                if (typeof va === 'number' && typeof vb === 'number') return sortAsc ? va - vb : vb - va;
+                return sortAsc ? String(va || '').localeCompare(String(vb || '')) : String(vb || '').localeCompare(String(va || ''));
+            });
+        }
+
+        function updateValuation(rowId, newVal) {
+            const val = parseFloat(newVal) || 0;
+            const item = rawData.find(r => r['列號'] === rowId);
+            if (item) {
+                item['目前估值_TWD'] = val;
+                item['未實現損益_TWD'] = val - item['購入成本_TWD'];
+                updateKPIs(); renderTable();
+            }
+        }
+
+        function updateKPIs() {
+            const count = filteredData.length;
+            const rcCount = filteredData.filter(r => r['RC'] === 'V').length;
+            const totalCost = filteredData.reduce((s, r) => s + r['購入成本_TWD'], 0);
+            const totalVal = filteredData.reduce((s, r) => s + r['目前估值_TWD'], 0);
+            const pnl = totalVal - totalCost;
+            const roi = totalCost > 0 ? (pnl / totalCost) * 100 : 0;
+            const graded = filteredData.filter(r => r['鑑定'] !== '裸卡(Raw)');
+            const psa10 = filteredData.filter(r => r['鑑定'] === 'PSA' && String(r['分數']) === '10').length;
+            const psa9 = filteredData.filter(r => r['鑑定'] === 'PSA' && String(r['分數']).startsWith('9')).length;
+
+            document.getElementById('kpi-count').textContent = `${count.toLocaleString()} 張`;
+            document.getElementById('kpi-rc-sub').textContent = `RC 新秀卡: ${rcCount} 張 | 限編卡: ${filteredData.filter(r => r['限編']).length} 張`;
+            document.getElementById('kpi-cost').textContent = `$${Math.round(totalCost).toLocaleString()}`;
+            document.getElementById('kpi-avg-cost').textContent = `平均單價: $${Math.round(count ? totalCost/count : 0).toLocaleString()}`;
+            document.getElementById('kpi-val').textContent = `$${Math.round(totalVal).toLocaleString()}`;
+            const pnlEl = document.getElementById('kpi-pnl');
+            const sign = pnl >= 0 ? '+' : '';
+            pnlEl.textContent = `${sign}$${Math.round(pnl).toLocaleString()} (${sign}${roi.toFixed(1)}%)`;
+            pnlEl.className = `text-2xl font-bold mt-1 ${pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+            document.getElementById('kpi-psa').textContent = `${graded.length} 張`;
+            document.getElementById('kpi-psa-detail').textContent = `PSA 10: ${psa10} 張 | PSA 9: ${psa9} 張 | 其他: ${graded.length - psa10 - psa9} 張`;
+        }
+
+        function updateCharts() {
+            const pMap = {}, yMap = {}, gMap = {};
+            filteredData.forEach(r => {
+                pMap[r['球員']] = (pMap[r['球員']] || 0) + r['購入成本_TWD'];
+                yMap[r['年分']] = (yMap[r['年分']] || 0) + r['購入成本_TWD'];
+                if (r['鑑定'] !== '裸卡(Raw)') {
+                    const label = `${r['鑑定']} ${r['分數']}`;
+                    gMap[label] = (gMap[label] || 0) + 1;
+                }
+            });
+            const pSorted = Object.entries(pMap).sort((a, b) => b[1] - a[1]).slice(0, 10);
+            const ySorted = Object.entries(yMap).sort((a, b) => b[1] - a[1]).slice(0, 10);
+            const gSorted = Object.entries(gMap).sort((a, b) => b[1] - a[1]);
+
+            if (chartPlayers) chartPlayers.destroy();
+            chartPlayers = new Chart(document.getElementById('chart-players'), {
+                type: 'bar',
+                data: { labels: pSorted.map(x => x[0]), datasets: [{ data: pSorted.map(x => x[1]), backgroundColor: '#3b82f6', borderRadius: 4 }] },
+                options: { indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#94a3b8' } }, y: { ticks: { color: '#e2e8f0', font: { size: 11 } } } } }
+            });
+            if (chartYears) chartYears.destroy();
+            chartYears = new Chart(document.getElementById('chart-years'), {
+                type: 'bar',
+                data: { labels: ySorted.map(x => x[0]), datasets: [{ data: ySorted.map(x => x[1]), backgroundColor: '#8b5cf6', borderRadius: 4 }] },
+                options: { plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#e2e8f0' } }, y: { ticks: { color: '#94a3b8' } } } }
+            });
+            if (chartGrades) chartGrades.destroy();
+            chartGrades = new Chart(document.getElementById('chart-grades'), {
+                type: 'doughnut',
+                data: {
+                    labels: gSorted.length ? gSorted.map(x => `${x[0]} (${x[1]}張)`) : ['無鑑定卡'],
+                    datasets: [{ data: gSorted.length ? gSorted.map(x => x[1]) : [1], backgroundColor: ['#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#eab308'] }]
+                },
+                options: { plugins: { legend: { position: 'right', labels: { color: '#e2e8f0', font: { size: 11 } } } } }
+            });
+        }
+
+        function renderTable() {
+            const tbody = document.getElementById('card-tbody');
+            tbody.innerHTML = filteredData.map(r => {
+                const isGraded = r['鑑定'] !== '裸卡(Raw)';
+                const gradeBadge = isGraded ? `<span class="px-2 py-0.5 rounded text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">${r['鑑定']} ${r['分數']}</span>` : `<span class="text-slate-500 text-xs">裸卡</span>`;
+                const rcBadge = r['RC'] === 'V' ? `<span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-blue-500/20 text-blue-300">RC</span>` : '';
+                const pnl = r['目前估值_TWD'] - r['購入成本_TWD'];
+                const pnlColor = pnl > 0 ? 'text-emerald-400 font-bold' : (pnl < 0 ? 'text-rose-400 font-bold' : 'text-slate-400');
+                const psaLink = r['PSA官網查驗連結'] ? `<a href="${r['PSA官網查驗連結']}" target="_blank" class="px-2 py-1 bg-amber-600/30 hover:bg-amber-600/50 text-amber-200 rounded text-xs">PSA查驗</a>` : '';
+                return `<tr class="hover:bg-slate-800/60">
+                    <td class="p-3 text-slate-300 whitespace-nowrap">${r['日期']}</td>
+                    <td class="p-3 font-semibold text-white">${r['球員']}${rcBadge}</td>
+                    <td class="p-3 text-slate-300">${r['年分']}</td>
+                    <td class="p-3 text-slate-300 text-xs">${r['牌子']}${r['系列'] ? ' / ' + r['系列'] : ''}<div class="text-slate-500 text-[11px]">${r['卡種']}</div></td>
+                    <td class="p-3 text-slate-200">${r['商品']} <span class="text-slate-400 text-xs">${r['卡號']}</span></td>
+                    <td class="p-3 whitespace-nowrap">${gradeBadge}<div class="text-[10px] text-slate-400">${r['鑑定編號'] ? '#' + r['鑑定編號'] : ''}</div></td>
+                    <td class="p-3 text-right font-medium text-amber-300">$${Math.round(r['購入成本_TWD']).toLocaleString()}</td>
+                    <td class="p-3 text-right"><input type="number" value="${Math.round(r['目前估值_TWD'])}" onchange="updateValuation(${r['列號']}, this.value)" class="w-24 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-right text-emerald-300 text-sm"></td>
+                    <td class="p-3 text-right ${pnlColor}">${pnl >= 0 ? '+' : ''}$${Math.round(pnl).toLocaleString()}</td>
+                    <td class="p-3 text-center whitespace-nowrap space-x-1"><a href="${r['eBay已售查詢連結']}" target="_blank" class="px-2 py-1 bg-blue-600/30 hover:bg-blue-600/50 text-blue-200 rounded text-xs">eBay成交價</a>${psaLink}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        function resetFilters() {
+            ['filter-search', 'filter-player', 'filter-card-year', 'filter-buy-year', 'filter-grade'].forEach(id => document.getElementById(id).value = '');
+            applyFilters();
+        }
+
+        function exportFilteredCSV() {
+            const csv = '\uFEFF' + Papa.unparse(filteredData);
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+            a.download = '球員卡篩選投資報表.csv';
+            a.click();
+        }
+    </script>
+</body>
+</html>
